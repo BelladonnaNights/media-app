@@ -647,19 +647,21 @@ function renderSlot(container, slotId, slotType){
   }
 
   // Drag events
-  slot.addEventListener('dragover',e=>{e.preventDefault();slot.classList.add('drag-over')});
-  slot.addEventListener('dragleave',e=>{slot.classList.remove('drag-over')});
-  slot.addEventListener('drop',e=>{
-    e.preventDefault(); slot.classList.remove('drag-over');
+  slot.addEventListener('dragenter', e=>{ e.preventDefault(); e.stopPropagation(); slot.classList.add('drag-over'); });
+  slot.addEventListener('dragover',  e=>{ e.preventDefault(); e.stopPropagation(); slot.classList.add('drag-over'); });
+  slot.addEventListener('dragleave', e=>{ e.stopPropagation(); slot.classList.remove('drag-over'); });
+  slot.addEventListener('drop', e=>{
+    e.preventDefault(); e.stopPropagation();
+    slot.classList.remove('drag-over');
     const pid = e.dataTransfer.getData('text/plain');
-    if(!pid) return;
-    // Remove from previous slot
-    Object.keys(schedule).forEach(k=>{if(schedule[k]===pid) delete schedule[k]});
-    schedule[slotId]=pid;
+    if(!pid || pid.startsWith('{')) return; // ignore sched-drag payloads
+    // Remove from any previous slot
+    Object.keys(schedule).forEach(k=>{ if(schedule[k]===pid) delete schedule[k]; });
+    schedule[slotId] = pid;
     save(true); refreshBothCalendars(); renderLibrary();
     showToast('Post scheduled ✓');
   });
-  slot.addEventListener('dblclick',e=>{clearSlot(slotId,e)});
+  slot.addEventListener('dblclick', e=>{ clearSlot(slotId, e); });
 
   container.appendChild(slot);
 }
@@ -708,12 +710,17 @@ function renderLibrary(){
     card.className='post-card'+(isScheduled(post.id)?' scheduled':'');
     card.draggable=true;
     card.dataset.postId=post.id;
-    card.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',post.id);e.dataTransfer.effectAllowed='copy'});
+    card.addEventListener('dragstart',e=>{
+      e.dataTransfer.setData('text/plain',post.id);
+      e.dataTransfer.effectAllowed='move';
+    });
 
     const imgWrap = document.createElement('div'); imgWrap.className='post-card-img-wrap';
-    imgWrap.onclick=()=>triggerImgUpload(post.id);
+    // Prevent the image area click from firing during a drag
+    imgWrap.addEventListener('mousedown', e=>{ e.stopPropagation(); });
+    imgWrap.addEventListener('click', e=>{ e.stopPropagation(); triggerImgUpload(post.id); });
     if(post.img){
-      const img = document.createElement('img'); img.src=post.img; img.draggable=false;
+      const img = document.createElement('img'); img.src=post.img; img.draggable=false; img.style.pointerEvents='none';
       imgWrap.appendChild(img);
     } else {
       imgWrap.innerHTML=`<div class="img-placeholder"><div class="img-placeholder-icon">＋</div><div class="img-placeholder-text">Add photo</div></div>`;
@@ -747,20 +754,34 @@ function deletePost(id){
   save(true); renderLibrary(); refreshBothCalendars(); showToast('Post deleted');
 }
 
-function triggerImgUpload(postId){
-  const inp = document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.style.cssText='position:fixed;opacity:.01;top:0;left:0;pointer-events:none';
+// Single permanent file input — the only reliably cross-browser approach
+let _uploadTargetId = null;
+function _initFileInput(){
+  const inp = document.createElement('input');
+  inp.type='file'; inp.accept='image/*'; inp.id='_globalFileInput';
+  inp.style.cssText='position:fixed;top:-9999px;left:-9999px;opacity:0;pointer-events:none;width:1px;height:1px';
   document.body.appendChild(inp);
-  inp.addEventListener('change',e=>{
-    const file = e.target.files[0]; if(!file){document.body.removeChild(inp);return;}
+  inp.addEventListener('change', e=>{
+    const file = e.target.files[0];
+    if(!file){ inp.value=''; return; }
+    const postId = _uploadTargetId;
     const reader = new FileReader();
     reader.onload=ev=>{
-      const post = getPostById(postId); if(!post){document.body.removeChild(inp);return;}
-      post.img=ev.target.result; save(true); renderLibrary(); refreshBothCalendars(); renderIG();
-      showToast('Photo added ✓'); document.body.removeChild(inp);
+      const post = getPostById(postId);
+      if(post){
+        post.img=ev.target.result;
+        save(true); renderLibrary(); refreshBothCalendars();
+        if(document.getElementById('tab-ig').classList.contains('active')) renderIG();
+        showToast('Photo added ✓');
+      }
+      inp.value='';
     };
     reader.readAsDataURL(file);
   });
-  inp.click();
+}
+function triggerImgUpload(postId){
+  _uploadTargetId = postId;
+  document.getElementById('_globalFileInput').click();
 }
 
 // ===================== QUEUE =====================
@@ -1137,6 +1158,7 @@ document.getElementById('notes-textarea').addEventListener('input',function(){
 // ===================== INIT =====================
 loadData();
 populateTypeDropdowns();
+_initFileInput();
 renderCalendar();
 renderLibrary();
 renderCategories();
